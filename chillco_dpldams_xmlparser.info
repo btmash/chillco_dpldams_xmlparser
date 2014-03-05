@@ -1,0 +1,4 @@
+name = "Chillco DPMDAMS XML Parser"
+description = "Parse DPMDAMS XML Schema"
+core = 7.x
+package = Chillco

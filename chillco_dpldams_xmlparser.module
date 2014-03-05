@@ -1,0 +1,223 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function chillco_dpldams_xmlparser_menu() {
+  $items = array();
+
+  $items['admin/config/development/chillco_dpldams_xmlparser'] = array(
+    'title' => 'Test DAMS XML Parser',
+    'description' => 'Test that the DAMS XML Parser Works',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('chillco_dpldams_xmlparser_test_form'),
+    'access callback' => 'user_access',
+    'access arguments' => array('access content'),
+  );
+
+  return $items;
+}
+
+function chillco_dpldams_xmlparser_test_form($form, &$form_state) {
+  $form['chillco_dpldams_xmlparser_xml'] = array(
+    '#type' => 'textarea',
+    '#title' => t('DPL DAMS XML'),
+    '#description' => t('Add the xml AS IS from a sample record to test the appropriate mapping.'),
+  );
+  
+  return confirm_form($form, 'Test XML', 'admin/config/development/chillco_dpldams_xmlparser');
+}
+
+function chillco_dpldams_xmlparser_test_form_submit($form, &$form_state) {
+  $values = $form_state['values'];
+  if (!empty($values['chillco_dpldams_xmlparser_xml'])) {
+    drupal_set_message(check_markup(chillco_dpldams_xmlparser_transform($values['chillco_dpldams_xmlparser_xml'])));
+  }
+}
+
+function chillco_dpldams_xmlparser_contains_string($string, array $items) {
+  foreach ($items as $item) {
+    if (stripos($string, $item) !== FALSE) {
+      return $item;
+    }
+  }
+  return FALSE;
+}
+
+function chillco_dpldams_xmlparser_transform($xml_string) {
+  try {
+    $xml = new SimpleXMLElement($xml_string);
+    $xsl_file = simplexml_load_file(drupal_realpath(drupal_get_path('module', 'chillco_dpldams_xmlparser') . '/dpldams_transform.xsl'));
+    $xslt = new XSLTProcessor();
+    $xslt->importStylesheet($xsl_file);
+    $transformed_xml = new SimpleXMLElement($xslt->transformToXML($xml));
+
+    foreach ($xml->FILEFORM as $fileform) {
+      /*
+       * Add new element.
+       */
+      // $element = $transformed_xml->addChild('new_element_tag', 'optional_new_element_string_value');
+      // $element->addAttribute('new_element_attribute', 'optional_new_element_attribute_value');
+      /**
+       * Add subchild to new element.
+       */
+      // $subchild = $element->addChild('subchild_tag', 'optional_subchild_string_value');
+      // $subchild->addAttribute('new_element_attribute', 'optional_new_element_attribute_value');
+  
+      // Repeat as needed to get deeper.
+    }
+
+    foreach ($xml->SOURCE as $source_field) {
+      $source = (string) $source_field;
+      $month_names = array(
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
+      );
+      // Determine if string contains key phrase.
+      if (stripos($source, 'reproduction of') !== FALSE) {
+        $needle = 'from the ';
+        // Store substring of department name.
+        $dept = substr(stristr($source, $needle), strlen($needle));
+        if ($transformed_xml->location[0]) {
+          $element = $transformed_xml->location[0];
+          // Add physicalLocation subelement to existing location element.
+          $subchild = $element->addChild('physicalLocation', $dept);
+          $subchild->addAttribute('displayLabel', 'Department');
+        }
+        else {
+          // Add new location element.
+          $element = $transformed_xml->addChild('location');
+          // Add physicalLocation subelement to new location element.
+          $subchild = $element->addChild('physicalLocation', $dept);
+          $subchild->addAttribute('displayLabel', 'Department');
+        }
+      }
+      // Determine if string contains a named month.
+      elseif (($month = chillco_dpldams_xmlparser_contains_string($source, $month_names)) !== FALSE) {
+        // Store substring of publisher.
+        $pub = trim(stristr($source, $month, TRUE), ', ');
+        if ($transformed_xml->originInfo[0]) {
+          $element = $transformed_xml->originInfo[0];
+          // Add publisher subelement to existing originInfo element.
+          $subchild = $element->addChild('publisher', $pub);
+        }
+        else {
+          // Add new originInfo element.
+          $element = $transformed_xml->addChild('originInfo');
+          // Add publisher subelement to new originInfo element.
+          $subchild = $element->addChild('publisher', $pub);
+        }
+        // Store substring of dateIssued.
+        $dateIss = stristr($source, $month);
+        if ($transformed_xml->originInfo[0]) {
+          $element = $transformed_xml->originInfo[0];
+          // Add dateIssued subelement to existing originInfo element.
+          $subchild = $element->addChild('dateIssued', $dateIss);
+        }
+        else {
+          // Add new originInfo element.
+          $element = $transformed_xml->addChild('originInfo');
+          // Add dateIssued subelement to new originInfo element.
+          $subchild = $element->addChild('dateIssued', $dateIss);
+        }       
+      }
+    }
+
+    foreach ($xml->RELATION as $relation_field) {
+      $relation = (string) $relation_field;
+      $collections = array(
+        'Bill and Doris Rauhauser Photography Archive',
+        'Lazarnick Collection',
+        'Packard Collection',
+        'Archives of the Detroit Public Library',
+        'Paul Gach Collection',
+        'Harvey C. Jackson Collection',
+        'Boulevard Photographic Collection',
+      );
+      $negatives = array(
+        'Negative',
+        'neg.',
+        'lantern',
+      );
+      // Look for collections.
+      if (($collection = chillco_dpldams_xmlparser_contains_string($relation, $collections)) !== FALSE) {
+        // Add new relatedItem element.
+        $element = $transformed_xml->addChild('relatedItem');
+        $element->addAttribute('type', 'host');
+        $element->addAttribute('displayLabel', 'Collection');
+        // Add titleInfo subelement to new relatedItem element.
+        $subchild = $element->addChild('titleInfo');
+        // Add title subelement to new titleInfo subelement.
+        $subsubchild = $subchild->addChild('title', $collection);
+      }
+      // Look for filing locations.
+      elseif (stripos($relation, 'filed in ') !== FALSE) {
+        $needle = 'collection as ';
+        // Store substring of filing location.
+        $fl = substr(stristr($relation, $needle), strlen($needle));
+        if ($transformed_xml->location[0]) {
+          $element = $transformed_xml->location[0];
+          // Add shelfLocator subelement to existing location element.
+          $subchild = $element->addChild('shelfLocator', $fl);
+        }
+        else {
+          // Add new location element.
+          $element = $transformed_xml->addChild('location');
+          // Add shelfLocator subelement to new location element.
+          $subchild = $element->addChild('shelfLocator', $fl);
+        }
+      }
+      // Look for filing locations with alternate syntax.
+      elseif (stripos($relation, 'filed alphabetically in ') !== FALSE) {
+        $needle = 'collection of ';
+        // Store substring of filing location.
+        $fl = substr(stristr($relation, $needle), strlen($needle));
+        if ($transformed_xml->location[0]) {
+          $element = $transformed_xml->location[0];
+          // Add shelfLocator subelement to existing location element.
+          $subchild = $element->addChild('shelfLocator', $fl);
+        }
+        else {
+          // Add new location element.
+          $element = $transformed_xml->addChild('location');
+          // Add shelfLocator subelement to new location element.
+          $subchild = $element->addChild('shelfLocator', $fl);
+        }
+      }
+      // Look for negative numbers.
+      elseif (($negative = chillco_dpldams_xmlparser_contains_string($relation, $negatives)) !== FALSE) {
+        // Add new note element.
+        $element = $transformed_xml->addChild('note', $relation);
+        $element->addAttribute('type', 'negative number');
+        $element->addAttribute('displayLabel', 'Negative Number');
+      }
+      // Store everything else.
+      else {
+        // Add new note element.
+        $element = $transformed_xml->addChild('note', $relation);
+        $element->addAttribute('type', 'content');
+        $element->addAttribute('displayLabel', 'Content Note');        
+      }
+    }
+
+    //Format XML to save indented tree rather than one line
+    $dom = new DOMDocument('1.0');
+    $dom->preserveWhiteSpace = false;
+    $dom->formatOutput = true;
+    $dom->loadXML($transformed_xml->asXML());
+    return $dom->saveXML();
+  }
+  catch (Exception $e) {
+    drupal_set_message($e->getMessage(), 'error');
+  }
+}
