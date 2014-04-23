@@ -52,7 +52,44 @@ function chillco_dpldams_xmlparser_transform($xml_string) {
     $xslt->importStylesheet($xsl_file);
     $transformed_xml = new SimpleXMLElement($xslt->transformToXML($xml));
 
-    foreach ($xml->FILEFORM as $fileform) {
+    // Avoid case-sensitvity.
+    // RESOURCEID/resourceid is checked because it exists in every record.
+    if ($xml->RESOURCEID) {
+      $fileform = 'FILEFORM';
+      $publisher = 'PUBLISHER';
+      $source = 'SOURCE';
+      $date = 'DATE';
+      $relation = 'RELATION';
+    }
+    elseif ($xml->resourceid) {
+      $fileform = 'fileform';
+      $publisher = 'publisher';
+      $source = 'source';
+      $date = 'date';
+      $relation = 'relation';
+    }
+    else {
+      // Bad record.
+      return '';
+    }
+
+    foreach ($xml->$fileform as $fileform_field) {
+      $fileform = (string) $fileform_field;
+      // Determine if the string starts with JPEG.
+      if (strpos($fileform, 'JPEG') !== 0) {
+        // Add the appropriate physicalDescription note.
+        if ($transformed_xml->physicalDescription[0]) {
+          $element = $transformed_xml->physicalDescription[0];
+          // Add note subelement to existing physicalDescription element.
+          $subchild = $element->addChild('note', $fileform);
+        }
+        else {
+          // Add new physicalDescription element.
+          $element = $transformed_xml->addChild('physicalDescription');
+          // Add note subelement to new physicalDescription element.
+          $subchild = $element->addChild('note', $fileform);
+        }
+      }
       /*
        * Add new element.
        */
@@ -67,7 +104,22 @@ function chillco_dpldams_xmlparser_transform($xml_string) {
       // Repeat as needed to get deeper.
     }
 
-    foreach ($xml->SOURCE as $source_field) {
+    foreach ($xml->$publisher as $publisher_field) {
+      $publisher = (string) $publisher_field;
+      if ($transformed_xml->originInfo[0]) {
+        $element = $transformed_xml->originInfo[0];
+        // Add publisher subelement to existing originInfo element.
+        $subchild = $element->addChild('publisher', $publisher);
+      }
+      else {
+        // Add new originInfo element.
+        $element = $transformed_xml->addChild('originInfo');
+        // Add publisher subelement to new originInfo element.
+        $subchild = $element->addChild('publisher', $publisher);
+      }
+    }
+
+    foreach ($xml->$source as $source_field) {
       $source = (string) $source_field;
       $month_names = array(
         'January',
@@ -83,7 +135,7 @@ function chillco_dpldams_xmlparser_transform($xml_string) {
         'November',
         'December',
       );
-      // Determine if string contains key phrase.
+      // Determine if string contains phrase indicating department name follows.
       if (stripos($source, 'reproduction of') !== FALSE) {
         $needle = 'from the ';
         // Store substring of department name.
@@ -131,9 +183,42 @@ function chillco_dpldams_xmlparser_transform($xml_string) {
           $subchild = $element->addChild('dateIssued', $dateIss);
         }       
       }
+      // If string does not contain "reproduction of" or a named month,
+      // use the complete string in the publisher element.
+      else {
+        if ($transformed_xml->originInfo[0]) {
+          $element = $transformed_xml->originInfo[0];
+          // Add publisher subelement to existing originInfo element.
+          $subchild = $element->addChild('publisher', $source);
+        }
+        else {
+          // Add new originInfo element.
+          $element = $transformed_xml->addChild('originInfo');
+          // Add publisher subelement to new originInfo element.
+          $subchild = $element->addChild('publisher', $source);
+        }
+      }
     }
 
-    foreach ($xml->RELATION as $relation_field) {
+    // if date field exists && there is no originInfo->dateIssued set
+    // use the date field
+    if ($xml->$date && !$transformed_xml->originInfo[0]->dateIssued) {
+      // Store date.
+      $dateIss = $xml->$date;
+      if ($transformed_xml->originInfo[0]) {
+        $element = $transformed_xml->originInfo[0];
+        // Add dateIssued subelement to existing originInfo element.
+        $subchild = $element->addChild('dateIssued', $dateIss);
+      }
+      else {
+        // Add new originInfo element.
+        $element = $transformed_xml->addChild('originInfo');
+        // Add dateIssued subelement to new originInfo element.
+        $subchild = $element->addChild('dateIssued', $dateIss);
+      }
+    }
+
+    foreach ($xml->$relation as $relation_field) {
       $relation = (string) $relation_field;
       $collections = array(
         'Bill and Doris Rauhauser Photography Archive',
@@ -148,17 +233,54 @@ function chillco_dpldams_xmlparser_transform($xml_string) {
         'Negative',
         'neg.',
         'lantern',
+        'SAM-',
+        'EUR-',
+        'ASI-',
+        'AFR-',
+        'NAM-',
+        'AUS-',
       );
-      // Look for collections.
+      // Look for collection names.
       if (($collection = chillco_dpldams_xmlparser_contains_string($relation, $collections)) !== FALSE) {
-        // Add new relatedItem element.
-        $element = $transformed_xml->addChild('relatedItem');
-        $element->addAttribute('type', 'host');
-        $element->addAttribute('displayLabel', 'Collection');
-        // Add titleInfo subelement to new relatedItem element.
-        $subchild = $element->addChild('titleInfo');
-        // Add title subelement to new titleInfo subelement.
-        $subsubchild = $subchild->addChild('title', $collection);
+        // if the relation field with collection name contains a comma
+        if ((strpos($collection, ',')) !== FALSE) {
+          // store the collection name
+          $coll = strstr($collection, ',', TRUE);
+          // store the shelf location
+          $sl = ltrim(strstr($collection, ','), ', ');
+
+          // Add new relatedItem element.
+          $element = $transformed_xml->addChild('relatedItem');
+          $element->addAttribute('type', 'host');
+          $element->addAttribute('displayLabel', 'Collection');
+          // Add titleInfo subelement to new relatedItem element.
+          $subchild = $element->addChild('titleInfo');
+          // Add title subelement to new titleInfo subelement.
+          $subsubchild = $subchild->addChild('title', $coll);
+
+          // Add shelfLocator element.
+          if ($transformed_xml->location[0]) {
+            $element = $transformed_xml->location[0];
+            // Add shelfLocator subelement to existing location element.
+            $subchild = $element->addChild('shelfLocator', $sl);
+          }
+          else {
+            // Add new location element.
+            $element = $transformed_xml->addChild('location');
+            // Add shelfLocator subelement to new location element.
+            $subchild = $element->addChild('shelfLocator', $sl);
+          }
+        }
+        else {
+          // Add new relatedItem element.
+          $element = $transformed_xml->addChild('relatedItem');
+          $element->addAttribute('type', 'host');
+          $element->addAttribute('displayLabel', 'Collection');
+          // Add titleInfo subelement to new relatedItem element.
+          $subchild = $element->addChild('titleInfo');
+          // Add title subelement to new titleInfo subelement.
+          $subsubchild = $subchild->addChild('title', $collection);
+        }
       }
       // Look for filing locations.
       elseif (stripos($relation, 'filed in ') !== FALSE) {
@@ -182,6 +304,20 @@ function chillco_dpldams_xmlparser_transform($xml_string) {
         $needle = 'collection of ';
         // Store substring of filing location.
         $fl = substr(stristr($relation, $needle), strlen($needle));
+        if ($transformed_xml->location[0]) {
+          $element = $transformed_xml->location[0];
+          // Add shelfLocator subelement to existing location element.
+          $subchild = $element->addChild('shelfLocator', $fl);
+        }
+        else {
+          // Add new location element.
+          $element = $transformed_xml->addChild('location');
+          // Add shelfLocator subelement to new location element.
+          $subchild = $element->addChild('shelfLocator', $fl);
+        }
+      }
+      // Look for manuscripts.
+      elseif (($fl = strpos($relation, 'MS')) === 0) {
         if ($transformed_xml->location[0]) {
           $element = $transformed_xml->location[0];
           // Add shelfLocator subelement to existing location element.
